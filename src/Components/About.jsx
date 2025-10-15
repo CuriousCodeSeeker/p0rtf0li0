@@ -1,367 +1,451 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from "react";
+import React, { useEffect, useRef, useState } from 'react';
+import * as THREE from 'three';
 
-
-import * as THREE from "three";
-import { gsap } from "gsap";
-import { ScrollTrigger } from "gsap/ScrollTrigger";
-
-gsap.registerPlugin(ScrollTrigger);
-
-// Enhanced GLSL shader with scroll-driven spiral rotation
-const vertexShader = `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-
-const fragmentShader = `
-  precision highp float;
-  varying vec2 vUv;
-  uniform float uTime;
-  uniform float uScrollProgress;
-  uniform vec2 uResolution;
-  uniform vec2 uMouse;
-
-  // 2D noise (iq)
-  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
-  float noise(in vec2 p){
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f*f*(3.0-2.0*f);
-    return mix(mix(hash(i + vec2(0.0,0.0)), hash(i + vec2(1.0,0.0)), u.x),
-               mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0,1.0)), u.x), u.y);
-  }
-
-  // Rotate function
-  vec2 rotate(vec2 v, float angle) {
-    float s = sin(angle);
-    float c = cos(angle);
-    return vec2(v.x * c - v.y * s, v.x * s + v.y * c);
-  }
-
-  void main() {
-    vec2 uv = vUv;
-    vec2 st = uv * vec2(uResolution.x / uResolution.y, 1.0);
-    
-    // Center coordinates
-    vec2 center = vec2(0.0);
-    vec2 pos = st - center;
-    
-    // Enhanced scroll-driven spiral with escape animation
-    float spiralRotation = uScrollProgress * 3.14159 * 4.0;
-    float spiralTightness = 0.3 + uScrollProgress * 2.0;
-    float spiralRadius = length(pos) * spiralTightness;
-    float spiralAngle = atan(pos.y, pos.x) + spiralRotation;
-    
-    // Create dynamic spiral pattern that intensifies with scroll
-    float spiral = sin(spiralAngle * 2.0 + spiralRadius * 1.5 - uTime * 3.0);
-    spiral = smoothstep(0.2, 0.8, spiral);
-    
-    // Add spiral escape effect (spiral moves outward and rotates faster)
-    float escapePhase = max(0.0, (uScrollProgress - 0.6) / 0.4);
-    float escapeRotation = escapePhase * 3.14159 * 6.0;
-    float escapeRadius = escapePhase * 2.0;
-    
-    // Rotate coordinates with escape animation
-    vec2 rotatedPos = rotate(pos, uScrollProgress * 2.0 + escapeRotation);
-    
-    // Add escape displacement
-    rotatedPos += vec2(sin(escapeRotation) * escapeRadius, cos(escapeRotation) * escapeRadius * 0.5);
-    
-    // Time with scroll influence
-    float t = uTime * 0.1 + uScrollProgress * 2.0;
-    
-    // Multi-layered noise with scroll-driven rotation
-    float n1 = noise(rotatedPos * 2.0 + vec2(t, 0.0));
-    float n2 = noise(rotatedPos * 3.0 + vec2(0.0, t));
-    float n3 = noise(rotatedPos * 4.0 + vec2(-t, t));
-    
-    // Mouse parallax with scroll influence
-    vec2 m = (uMouse - 0.5) * 0.3 * (1.0 + uScrollProgress);
-    float swirl = noise((rotatedPos + m) * 2.5 + t);
-    
-    // Color mixing with scroll influence
-    vec3 colA = vec3(0.39, 0.40, 0.95); // indigo-400
-    vec3 colB = vec3(0.55, 0.36, 0.96); // purple-400
-    vec3 colC = vec3(0.93, 0.31, 0.60); // pink-400
-    
-    // Scroll-driven color intensity
-    float colorIntensity = 0.8 + uScrollProgress * 0.4;
-    
-    float band1 = smoothstep(0.25, 0.75, n1);
-    float band2 = smoothstep(0.3, 0.8, n2);
-    float band3 = smoothstep(0.35, 0.85, n3);
-    
-    vec3 color = mix(colA, colB, band1);
-    color = mix(color, colC, band2 * 0.6 + band3 * 0.4);
-    
-    // Add enhanced spiral effect with escape animation
-    float spiralIntensity = spiral * (1.0 + escapePhase * 2.0);
-    color = mix(color, color * 2.0, spiralIntensity * 0.4);
-    
-    // Dynamic vignette that expands during escape
-    float vignetteRadius = 0.95 - uScrollProgress * 0.3 - escapePhase * 0.4;
-    float vignette = smoothstep(vignetteRadius, 0.2, length(uv - 0.5));
-    color *= vignette * (1.2 + uScrollProgress * 0.5);
-    
-    // Enhanced swirl glow with escape effect
-    float glowIntensity = 0.08 * (1.0 + uScrollProgress * 0.8 + escapePhase * 1.5);
-    color += glowIntensity * swirl;
-    
-    // Add scroll-driven brightness with escape fade
-    float brightness = 0.8 + uScrollProgress * 0.6 - escapePhase * 0.3;
-    color *= brightness;
-    
-    // Add escape trail effect
-    if (escapePhase > 0.0) {
-      float trail = sin(spiralAngle * 4.0 + uTime * 5.0) * escapePhase;
-      color += vec3(0.1, 0.2, 0.4) * trail * escapePhase;
-    }
-    
-    gl_FragColor = vec4(color, 1.0);
-  }
-`;
-
-export default function VisualShowcaseSection() {
+export default function About() {
   const canvasRef = useRef(null);
   const sectionRef = useRef(null);
-  const headingRef = useRef(null);
-  const subRef = useRef(null);
-  const [scrollProgress, setScrollProgress] = useState(0);
-  const [mousePosition, setMousePosition] = useState({ x: 0.5, y: 0.5 });
-  const [isPreloaded, setIsPreloaded] = useState(false);
-  
-  // Memoized shader uniforms for better performance
-  const initialUniforms = useMemo(() => ({
-    uTime: { value: 0 },
-    uScrollProgress: { value: 0 },
-    uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
-    uMouse: { value: new THREE.Vector2(0.5, 0.5) }
-  }), []);
-
-  useLayoutEffect(() => {
-    if (!sectionRef.current) return;
-    const ctx = gsap.context(() => {
-      gsap.set([headingRef.current, subRef.current], { autoAlpha: 0, y: 24 });
-
-      gsap.timeline({
-        defaults: { ease: "power3.out", duration: 1.1 }
-      })
-      .to(headingRef.current, { autoAlpha: 1, y: 0 })
-      .to(subRef.current, { autoAlpha: 1, y: 0 }, "<0.1");
-
-      // Scroll-linked slight parallax
-      gsap.to([headingRef.current, subRef.current], {
-        yPercent: (i) => (i === 0 ? -6 : -10),
-        ease: "none",
-        scrollTrigger: {
-          trigger: sectionRef.current,
-          start: "top bottom",
-          end: "bottom top",
-          scrub: 0.5
-        }
-      });
-    }, sectionRef);
-
-    return () => ctx.revert();
-  }, []);
+  const [scrollY, setScrollY] = useState(0);
+  const [sectionScroll, setSectionScroll] = useState(0);
 
   useEffect(() => {
-    let scrollTicking = false;
-    let mouseTicking = false;
-
     const handleScroll = () => {
-      if (!scrollTicking) {
-        requestAnimationFrame(() => {
-          if (sectionRef.current) {
-            const rect = sectionRef.current.getBoundingClientRect();
-            const windowHeight = window.innerHeight;
-            const progress = Math.max(0, Math.min(1, (windowHeight - rect.top) / windowHeight));
-            setScrollProgress(progress);
-          }
-          scrollTicking = false;
-        });
-        scrollTicking = true;
+      setScrollY(window.scrollY);
+      
+      if (sectionRef.current) {
+        const rect = sectionRef.current.getBoundingClientRect();
+        const sectionTop = rect.top;
+        const windowHeight = window.innerHeight;
+        
+        // Calculate section progress (0 to 1)
+        const progress = Math.max(0, Math.min(1, (windowHeight - sectionTop) / windowHeight));
+        setSectionScroll(progress);
       }
     };
-
-    const handleMouseMove = (e) => {
-      if (!mouseTicking) {
-        requestAnimationFrame(() => {
-          setMousePosition({
-            x: e.clientX / window.innerWidth,
-            y: 1.0 - e.clientY / window.innerHeight
-          });
-          mouseTicking = false;
-        });
-        mouseTicking = true;
-      }
-    };
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    window.addEventListener('mousemove', handleMouseMove, { passive: true });
+    
+    window.addEventListener('scroll', handleScroll);
     handleScroll();
-
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-      window.removeEventListener('mousemove', handleMouseMove);
-    };
+    
+    return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
   useEffect(() => {
     if (!canvasRef.current) return;
 
-    const preloadAboutScene = async () => {
-      try {
-        const renderer = new THREE.WebGLRenderer({
-          canvas: canvasRef.current,
-          alpha: true,
-          antialias: true,
-          powerPreference: "high-performance"
-        });
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.setSize(window.innerWidth, window.innerHeight);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = 15;
 
-        const scene = new THREE.Scene();
-        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const renderer = new THREE.WebGLRenderer({
+      canvas: canvasRef.current,
+      alpha: true,
+      antialias: true,
+    });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-        // Use memoized uniforms for better performance
-        const uniforms = { ...initialUniforms };
+    // Create DNA helix-like structure
+    const helixPoints = [];
+    const helixCount = 100;
+    const colors = [0x6366f1, 0x8b5cf6, 0xec4899, 0x06b6d4, 0xf59e0b];
 
-        const geometry = new THREE.PlaneGeometry(2, 2);
-        // Optimized shader material
-        const material = new THREE.ShaderMaterial({
-          uniforms,
-          vertexShader,
-          fragmentShader,
-          transparent: true,
-          depthWrite: false, // Optimize for transparency
-          depthTest: true
-        });
-        const mesh = new THREE.Mesh(geometry, material);
-        scene.add(mesh);
+    for (let i = 0; i < helixCount; i++) {
+      const t = i / helixCount;
+      const angle = t * Math.PI * 8;
+      const radius = 3;
+      
+      const geometry = new THREE.SphereGeometry(0.15, 8, 8);
+      const material = new THREE.MeshPhongMaterial({
+        color: colors[i % colors.length],
+        emissive: colors[i % colors.length],
+        emissiveIntensity: 0.5,
+        transparent: true,
+        opacity: 0.8
+      });
+      const sphere = new THREE.Mesh(geometry, material);
+      
+      sphere.position.set(
+        Math.cos(angle) * radius,
+        (t - 0.5) * 15,
+        Math.sin(angle) * radius
+      );
+      
+      sphere.userData = { 
+        index: i,
+        initialY: sphere.position.y,
+        color: colors[i % colors.length]
+      };
+      
+      helixPoints.push(sphere);
+      scene.add(sphere);
+    }
+
+    // Create connecting lines between helix points
+    const lineMaterial = new THREE.LineBasicMaterial({
+      color: 0x6366f1,
+      transparent: true,
+      opacity: 0.3
+    });
+
+    const lines = [];
+    for (let i = 0; i < helixPoints.length - 1; i++) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([
+        helixPoints[i].position,
+        helixPoints[i + 1].position
+      ]);
+      const line = new THREE.Line(geometry, lineMaterial.clone());
+      lines.push({ line, startIdx: i, endIdx: i + 1 });
+      scene.add(line);
+    }
+
+    // Create orbital rings
+    const orbitals = [];
+    for (let i = 0; i < 3; i++) {
+      const geometry = new THREE.TorusGeometry(5 + i * 2, 0.08, 16, 100);
+      const material = new THREE.MeshBasicMaterial({
+        color: colors[i],
+        transparent: true,
+        opacity: 0.2,
+        side: THREE.DoubleSide
+      });
+      const orbital = new THREE.Mesh(geometry, material);
+      orbital.rotation.x = Math.PI / 2 + i * 0.3;
+      orbital.rotation.y = i * 0.5;
+      
+      orbital.userData = {
+        rotationSpeed: 0.002 + i * 0.001,
+        pulseOffset: i * Math.PI / 3
+      };
+      
+      orbitals.push(orbital);
+      scene.add(orbital);
+    }
+
+    // Enhanced particles with trails
+    const particlesGeometry = new THREE.BufferGeometry();
+    const particlesCount = 1000;
+    const posArray = new Float32Array(particlesCount * 3);
+    const colorArray = new Float32Array(particlesCount * 3);
+    const sizeArray = new Float32Array(particlesCount);
+
+    for (let i = 0; i < particlesCount; i++) {
+      posArray[i * 3] = (Math.random() - 0.5) * 50;
+      posArray[i * 3 + 1] = (Math.random() - 0.5) * 50;
+      posArray[i * 3 + 2] = (Math.random() - 0.5) * 30;
+      
+      const colorChoice = Math.floor(Math.random() * colors.length);
+      const color = new THREE.Color(colors[colorChoice]);
+      colorArray[i * 3] = color.r;
+      colorArray[i * 3 + 1] = color.g;
+      colorArray[i * 3 + 2] = color.b;
+      
+      sizeArray[i] = Math.random() * 0.5 + 0.3;
+    }
+
+    particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+    particlesGeometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+    particlesGeometry.setAttribute('size', new THREE.BufferAttribute(sizeArray, 1));
+    
+    const particlesMaterial = new THREE.PointsMaterial({
+      size: 0.08,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.7,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true
+    });
+
+    const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
+    scene.add(particlesMesh);
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+
+    const pointLight1 = new THREE.PointLight(0x6366f1, 4, 100);
+    pointLight1.position.set(10, 10, 10);
+    scene.add(pointLight1);
+
+    const pointLight2 = new THREE.PointLight(0xec4899, 4, 100);
+    pointLight2.position.set(-10, -10, 10);
+    scene.add(pointLight2);
+
+    const pointLight3 = new THREE.PointLight(0x8b5cf6, 3, 80);
+    pointLight3.position.set(0, 0, 15);
+    scene.add(pointLight3);
+
+    // Mouse interaction
+    const mouse = new THREE.Vector2();
+    const onMouseMove = (event) => {
+      mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    };
+    window.addEventListener("mousemove", onMouseMove);
+
+    // Animation
+    let time = 0;
+    const animate = () => {
+      requestAnimationFrame(animate);
+      time += 0.01;
+
+      // Animate helix - wave motion
+      helixPoints.forEach((sphere, i) => {
+        const wave = Math.sin(time * 2 + i * 0.2) * 0.3;
+        sphere.position.y = sphere.userData.initialY + wave;
         
-        // Pre-render to warm up GPU
-        renderer.render(scene, camera);
+        // Pulsing scale
+        const pulse = 1 + Math.sin(time * 3 + i * 0.1) * 0.2;
+        sphere.scale.set(pulse, pulse, pulse);
         
-        setIsPreloaded(true);
-      } catch (error) {
-        console.error('Error during About preloading:', error);
-        setIsPreloaded(true); // Fallback
+        // Glowing effect
+        sphere.material.emissiveIntensity = 0.5 + Math.sin(time * 2 + i * 0.15) * 0.3;
+        
+        // Rotate around center
+        const currentAngle = Math.atan2(sphere.position.z, sphere.position.x);
+        const radius = Math.sqrt(sphere.position.x ** 2 + sphere.position.z ** 2);
+        const newAngle = currentAngle + 0.005;
+        sphere.position.x = Math.cos(newAngle) * radius;
+        sphere.position.z = Math.sin(newAngle) * radius;
+      });
+
+      // Update connecting lines
+      lines.forEach(({ line, startIdx, endIdx }) => {
+        const points = [
+          helixPoints[startIdx].position,
+          helixPoints[endIdx].position
+        ];
+        line.geometry.setFromPoints(points);
+        line.material.opacity = 0.3 + Math.sin(time * 2 + startIdx * 0.1) * 0.2;
+      });
+
+      // Animate orbitals
+      orbitals.forEach((orbital, i) => {
+        orbital.rotation.z += orbital.userData.rotationSpeed;
+        orbital.rotation.x += orbital.userData.rotationSpeed * 0.5;
+        
+        // Pulsing effect
+        const pulse = 1 + Math.sin(time * 2 + orbital.userData.pulseOffset) * 0.1;
+        orbital.scale.set(pulse, pulse, pulse);
+        
+        orbital.material.opacity = 0.2 + Math.sin(time + orbital.userData.pulseOffset) * 0.1;
+      });
+
+      // Animate particles with flow
+      const positions = particlesMesh.geometry.attributes.position.array;
+      const sizes = particlesMesh.geometry.attributes.size.array;
+      
+      for (let i = 0; i < positions.length; i += 3) {
+        // Spiral motion
+        positions[i] += Math.sin(time + i * 0.01) * 0.02;
+        positions[i + 1] += Math.cos(time + i * 0.01) * 0.02;
+        positions[i + 2] += Math.sin(time * 0.5 + i * 0.02) * 0.01;
+        
+        // Wrap around
+        if (positions[i] > 25) positions[i] = -25;
+        if (positions[i] < -25) positions[i] = 25;
+        if (positions[i + 1] > 25) positions[i + 1] = -25;
+        if (positions[i + 1] < -25) positions[i + 1] = 25;
+        
+        // Pulsing size
+        const sizeIndex = i / 3;
+        sizes[sizeIndex] = (0.3 + Math.sin(time * 2 + sizeIndex * 0.1) * 0.2);
       }
+      particlesMesh.geometry.attributes.position.needsUpdate = true;
+      particlesMesh.geometry.attributes.size.needsUpdate = true;
+      
+      particlesMesh.rotation.y += 0.0005;
 
-    let rafId = 0;
-    const clock = new THREE.Clock();
+      // Camera follows mouse with momentum
+      camera.position.x += (mouse.x * 2 - camera.position.x) * 0.05;
+      camera.position.y += (mouse.y * -2 - camera.position.y) * 0.05;
+      camera.lookAt(0, 0, 0);
 
-    const onResize = () => {
-      uniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
+      // Lights circular motion
+      pointLight1.position.x = 10 + Math.sin(time * 0.5) * 5;
+      pointLight1.position.z = 10 + Math.cos(time * 0.5) * 5;
+      
+      pointLight2.position.x = -10 + Math.cos(time * 0.7) * 5;
+      pointLight2.position.z = -10 + Math.sin(time * 0.7) * 5;
+
+      renderer.render(scene, camera);
+    };
+    animate();
+
+    const handleResize = () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
     };
+    window.addEventListener("resize", handleResize);
 
-    window.addEventListener("resize", onResize);
-
-    let lastTime = 0;
-    const targetFPS = 60;
-    const frameInterval = 1000 / targetFPS;
-    
-    // Cache uniform updates to avoid unnecessary calculations
-    let lastScrollProgress = -1;
-    let lastMouseX = -1;
-    let lastMouseY = -1;
-
-    // Optimized render loop - avoid per-frame React state updates
-    const render = useCallback((currentTime) => {
-      if (currentTime - lastTime >= frameInterval) {
-        // Only update uniforms when values actually change
-        const currentTimeValue = clock.getElapsedTime();
-        uniforms.uTime.value = currentTimeValue;
-        
-        if (scrollProgress !== lastScrollProgress) {
-          uniforms.uScrollProgress.value = scrollProgress;
-          lastScrollProgress = scrollProgress;
-        }
-        
-        if (mousePosition.x !== lastMouseX || mousePosition.y !== lastMouseY) {
-          uniforms.uMouse.value.set(mousePosition.x, mousePosition.y);
-          lastMouseX = mousePosition.x;
-          lastMouseY = mousePosition.y;
-        }
-        
-        renderer.render(scene, camera);
-        lastTime = currentTime;
-      }
-      rafId = requestAnimationFrame(render);
-    }, [scrollProgress, mousePosition, uniforms, clock, renderer, scene, camera]);
-    rafId = requestAnimationFrame(render);
-
-      return () => {
-        cancelAnimationFrame(rafId);
-        window.removeEventListener("resize", onResize);
-        geometry.dispose();
-        material.dispose();
-        renderer.dispose();
-      };
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("mousemove", onMouseMove);
+      renderer.dispose();
     };
-    
-    preloadAboutScene();
-    
-    // Fallback timeout for About section
-    const timeoutId = setTimeout(() => {
-      if (!isPreloaded) {
-        console.warn('About preloading timeout - showing content anyway');
-        setIsPreloaded(true);
-      }
-    }, 5000); // 5 second timeout
-    
-    return () => clearTimeout(timeoutId);
-  }, [scrollProgress, mousePosition]);
+  }, []);
+
+  const getTransform = (delay) => {
+    const progress = Math.max(0, sectionScroll - delay);
+    return {
+      opacity: Math.min(1, progress * 2),
+      transform: `translateY(${Math.max(0, (1 - progress) * 100)}px) scale(${0.8 + progress * 0.2})`,
+      transition: 'all 0.8s cubic-bezier(0.16, 1, 0.3, 1)'
+    };
+  };
 
   return (
     <section 
-      ref={sectionRef} 
-      className="relative w-full h-screen overflow-hidden bg-gradient-to-b from-slate-950 via-purple-950/30 to-slate-950"
-      style={{ opacity: isPreloaded ? 1 : 0, transition: 'opacity 0.5s ease-in' }}
+      ref={sectionRef}
+      className="relative w-full min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 overflow-hidden"
     >
-      <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full" />
-
-      {/* Enhanced vignette overlay with spiral transition */}
-      <div 
-        className="absolute inset-0 bg-gradient-radial from-transparent via-transparent to-slate-950/80 pointer-events-none"
-        style={{
-          opacity: Math.max(0.3, 1 - scrollProgress * 0.8),
-          transition: 'opacity 1s ease-out'
+      <canvas
+        ref={canvasRef}
+        className="fixed top-0 left-0 w-full h-full pointer-events-none"
+        style={{ 
+          opacity: Math.min(1, sectionScroll * 1.2),
+          transition: 'opacity 0.6s ease-out'
         }}
       />
       
-      {/* Spiral escape effect overlay */}
+      {/* Animated gradient overlay */}
       <div 
-        className="absolute inset-0 pointer-events-none"
+        className="fixed inset-0 pointer-events-none"
         style={{
-          opacity: Math.max(0, Math.min(1, (scrollProgress - 0.7) * 3)),
-          background: `conic-gradient(from ${scrollProgress * 360}deg, transparent 0%, rgba(99, 102, 241, 0.2) 30%, rgba(139, 92, 246, 0.2) 60%, transparent 100%)`,
-          transform: `scale(${1 + scrollProgress * 2}) rotate(${scrollProgress * 720}deg)`,
-          transition: 'all 1.5s ease-out'
+          background: `radial-gradient(circle at ${50 + sectionScroll * 20}% ${50 + sectionScroll * 10}%, rgba(99, 102, 241, 0.1), transparent 50%)`,
+          transition: 'all 1s ease-out'
         }}
       />
+      
+      <div className="relative z-10 flex flex-col items-center justify-center min-h-screen px-4 py-32">
+        <div className="max-w-7xl mx-auto w-full">
+          
+          {/* Main heading with animated underline */}
+          <div className="text-center mb-24" style={getTransform(0)}>
+            <div className="inline-block mb-6 relative">
+              <h2 className="text-6xl md:text-8xl font-bold mb-4">
+                <span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400">
+                  About Me
+                </span>
+              </h2>
+              <div 
+                className="h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full mx-auto"
+                style={{
+                  width: `${sectionScroll * 100}%`,
+                  transition: 'width 1s ease-out'
+                }}
+              />
+            </div>
+            <p className="text-2xl md:text-3xl text-gray-300 max-w-4xl mx-auto leading-relaxed font-light">
+              Crafting digital experiences where <span className="text-purple-400 font-semibold">art meets technology</span>
+            </p>
+          </div>
 
-      <div className="relative z-10 flex h-full w-full items-center justify-center px-6 text-center">
-        <div 
-          className="max-w-3xl"
-          style={{
-            opacity: Math.max(0, Math.min(1, (scrollProgress - 0.2) * 2)),
-            transform: `translateY(${Math.max(0, (1 - scrollProgress) * 100)}px) scale(${0.8 + scrollProgress * 0.2})`,
-            transition: 'all 1s ease-out'
-          }}
-        >
-          <h2 ref={headingRef} className="text-5xl md:text-7xl font-bold tracking-tight text-white">
-            About
-            <span className="block bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400">This Portfolio</span>
-          </h2>
-          <p ref={subRef} className="mt-6 text-lg md:text-xl text-gray-300 leading-relaxed">
-            Built with Three.js and custom GLSL shaders, this section brings a living, aurora-like background that subtly reacts to your cursor and scroll. GSAP powers smooth entrances and micro-parallax for a premium, cohesive feel with the hero.
-          </p>
+          {/* Large feature cards */}
+          <div className="grid lg:grid-cols-2 gap-8 mb-16">
+            <div 
+              className="group relative p-10 bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-transparent backdrop-blur-xl rounded-3xl border border-white/10 hover:border-indigo-500/50 transition-all duration-700 overflow-hidden"
+              style={getTransform(0.1)}
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/0 to-purple-500/0 group-hover:from-indigo-500/20 group-hover:to-purple-500/10 transition-all duration-700" />
+              <div className="relative z-10">
+                <div className="w-16 h-16 mb-6 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-3xl transform group-hover:scale-110 group-hover:rotate-6 transition-all duration-500">
+                  ✨
+                </div>
+                <h3 className="text-3xl font-bold mb-4 text-white">Creative Vision</h3>
+                <p className="text-gray-300 text-lg leading-relaxed mb-6">
+                  I transform complex ideas into intuitive, beautiful interfaces. Every project is a canvas 
+                  where innovation meets user-centric design, creating experiences that resonate and inspire.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <span className="px-4 py-2 bg-indigo-500/20 text-indigo-300 text-sm font-medium rounded-full border border-indigo-500/30">UI/UX Design</span>
+                  <span className="px-4 py-2 bg-purple-500/20 text-purple-300 text-sm font-medium rounded-full border border-purple-500/30">3D Graphics</span>
+                  <span className="px-4 py-2 bg-pink-500/20 text-pink-300 text-sm font-medium rounded-full border border-pink-500/30">Animation</span>
+                </div>
+              </div>
+            </div>
+
+            <div 
+              className="group relative p-10 bg-gradient-to-br from-purple-500/10 via-pink-500/5 to-transparent backdrop-blur-xl rounded-3xl border border-white/10 hover:border-purple-500/50 transition-all duration-700 overflow-hidden"
+              style={getTransform(0.2)}
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-purple-500/0 to-pink-500/0 group-hover:from-purple-500/20 group-hover:to-pink-500/10 transition-all duration-700" />
+              <div className="relative z-10">
+                <div className="w-16 h-16 mb-6 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-3xl transform group-hover:scale-110 group-hover:rotate-6 transition-all duration-500">
+                  🚀
+                </div>
+                <h3 className="text-3xl font-bold mb-4 text-white">Technical Excellence</h3>
+                <p className="text-gray-300 text-lg leading-relaxed mb-6">
+                  Leveraging cutting-edge technologies like Three.js, WebGL, and modern frameworks to build 
+                  performant, scalable solutions that push the boundaries of what's possible on the web.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <span className="px-4 py-2 bg-purple-500/20 text-purple-300 text-sm font-medium rounded-full border border-purple-500/30">Three.js</span>
+                  <span className="px-4 py-2 bg-pink-500/20 text-pink-300 text-sm font-medium rounded-full border border-pink-500/30">React</span>
+                  <span className="px-4 py-2 bg-cyan-500/20 text-cyan-300 text-sm font-medium rounded-full border border-cyan-500/30">WebGL</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Stats with animated counters */}
+          <div 
+            className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-20"
+            style={getTransform(0.3)}
+          >
+            {[
+              { value: '2+', label: 'Years', gradient: 'from-indigo-400 to-purple-400' },
+              { value: '25+', label: 'Projects', gradient: 'from-purple-400 to-pink-400' },
+              { value: '20+', label: 'Clients', gradient: 'from-pink-400 to-cyan-400' },
+              { value: '100%', label: 'Passion', gradient: 'from-cyan-400 to-indigo-400' }
+            ].map((stat, i) => (
+              <div 
+                key={i}
+                className="group relative p-8 bg-white/5 backdrop-blur-md rounded-2xl border border-white/10 hover:border-purple-500/50 transition-all duration-500 overflow-hidden"
+                style={{
+                  transform: `translateY(${Math.max(0, (1 - sectionScroll) * 50)}px)`,
+                  opacity: sectionScroll,
+                  transitionDelay: `${i * 0.1}s`
+                }}
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-purple-500/0 to-pink-500/0 group-hover:from-purple-500/10 group-hover:to-pink-500/10 transition-all duration-500" />
+                <div className="relative z-10 text-center">
+                  <div className={`text-5xl font-bold mb-2 bg-clip-text text-transparent bg-gradient-to-r ${stat.gradient}`}>
+                    {stat.value}
+                  </div>
+                  <div className="text-gray-400 text-sm font-medium">{stat.label}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Philosophy section */}
+          <div 
+            className="relative p-12 bg-gradient-to-br from-white/5 via-white/0 to-white/5 backdrop-blur-2xl rounded-3xl border border-white/10 mb-20"
+            style={getTransform(0.4)}
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-purple-500/5 to-pink-500/5 rounded-3xl" />
+            <div className="relative z-10 text-center max-w-4xl mx-auto">
+              <h3 className="text-4xl font-bold mb-6 bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400">
+                My Philosophy
+              </h3>
+              <p className="text-xl text-gray-300 leading-relaxed mb-8">
+                "Great design is invisible. It's not about flashy effects or complex animations—it's about creating 
+                seamless experiences that feel natural, intuitive, and delightful. Every line of code, every pixel, 
+                every interaction is an opportunity to exceed expectations and create something truly memorable."
+              </p>
+              <div className="inline-block">
+                <button className="group px-8 py-4 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white font-bold rounded-full hover:shadow-2xl hover:shadow-purple-500/50 transition-all duration-500 hover:scale-105">
+                  <span className="flex items-center gap-2">
+                    Let's Work Together
+                    <svg className="w-5 h-5 group-hover:translate-x-2 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                    </svg>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
     </section>
